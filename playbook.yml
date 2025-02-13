@@ -1,0 +1,294 @@
+---
+- name: Database configuration
+  hosts: database
+  become: yes
+  vars_files:
+    - /home/ubuntu/fundoo_book/vars/database_vars.yml
+  tasks:
+    - name: Update apt package index
+      apt:
+        update_cache: yes
+      tags: update
+
+    - name: Install PostgreSQL and dependencies
+      apt:
+        name:
+          - python3-psycopg2
+          - libpq-dev
+          - postgresql
+          - postgresql-contrib
+          - postgresql-client
+        state: present
+      tags: install
+
+    - name: Ensure PostgreSQL is enabled and started
+      systemd:
+        name: postgresql
+        enabled: yes
+        state: started
+      tags: service
+
+    - name: Update pg_hba.conf to allow MD5 authentication for connecting from backend
+      community.postgresql.postgresql_pg_hba:
+        dest: "/etc/postgresql/16/main/pg_hba.conf"
+        contype: host
+        users: all
+        databases: all
+        method: md5
+        address: "0.0.0.0/0"  # Adjust for security in production
+        create: true
+      become: true
+      become_user: root
+      notify:
+        - Restart PostgreSQL
+
+    - name: Execute PostgreSQL commands using a loop
+      shell: |
+        sudo -i -u postgres psql -c "{{ item }}"
+      args:
+        executable: /bin/bash
+      loop:
+        - "CREATE DATABASE {{ db_name }};"
+        - "CREATE USER {{ db_user }} WITH PASSWORD '{{ db_password }}';"
+        - "GRANT ALL PRIVILEGES ON DATABASE {{ db_name }} TO {{ db_user }};"
+        - "ALTER DATABASE {{ db_name }} OWNER TO {{ db_user }};"
+      register: psql_output
+
+    - name: Debug the output of the commands
+      debug:
+        var: psql_output.results
+
+    - name: Modify postgresql.conf to allow connections from all IPs
+      lineinfile:
+        path: /etc/postgresql/16/main/postgresql.conf
+        regexp: "^#listen_addresses = 'localhost'"
+        line: "listen_addresses = '*'"
+      notify:
+        - Restart PostgreSQL
+      tags: config
+
+  handlers:
+    - name: Restart PostgreSQL
+      systemd:
+        name: postgresql
+        state: restarted
+      tags: service
+
+    - name: Get PostgreSQL service status
+      systemd:
+        name: postgresql
+        state: started
+      register: postgres_status
+
+    - name: Debug PostgreSQL service status
+      debug:
+         msg: "PostgreSQL service is {{ postgres_status.status.ActiveState }} and is enabled: {{ postgres_status.status.UnitFileState }} "
+
+
+
+- name: Backend server configuration for Fundoo application
+  hosts: backend
+  become: yes
+  vars_files:
+    - /home/ubuntu/fundoo_book/vars/backend_vars.yml
+    - /home/ubuntu/fundoo_book/vars/database_vars.yml
+  tasks:
+    - name: Update and upgrade system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Ensure the /Aws_test directory exists
+      file:
+        path: /Aws_test
+        state: directory
+
+    - name: Clone the Fundoo app repository
+      git:
+        repo: https://github.com/Erangoud/Fundoo_app.git
+        dest: /Aws_test/
+        version: fundoo
+
+    - name: Install required system packages and dependencies
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-dev
+          - libpq-dev
+          - build-essential
+          - python3-venv
+        state: present
+
+    - name: Create a group named fundoo
+      group:
+        name: fundoo
+        state: present
+
+    - name: Create a user named fundoo
+      user:
+        name: fundoo
+        state: present
+        create_home: yes
+        shell: /bin/bash
+
+    - name: Change ownership of /Aws_test to fundoo:fundoo recursively
+      file:
+        path: /Aws_test
+        owner: fundoo
+        group: fundoo
+        recurse: yes
+        mode: '0755'
+
+    - name: Add fundoo user to sudoers file for systemctl operations
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        line: "fundoo ALL=(ALL) NOPASSWD: /bin/systemctl"
+
+    - name: Create a Python virtual environment
+      command:
+        cmd: python3 -m venv myenv
+        chdir: /Aws_test/
+
+    - name: Activate the virtual environment and install dependencies
+      shell: |
+        sudo su -c "
+          cd /Aws_test/ &&
+          source myenv/bin/activate &&
+          pip install wheel celery django-cors-headers &&
+          pip install -r requirements.txt
+        "
+
+    - name: install redies
+      apt:
+        name: redis-server
+        state: present
+    - name: start and enable redies
+      systemd:
+        name: redis
+        state: started
+        enabled: yes
+
+    - name: Ensure /etc/fundoo directory exists
+      file:
+        path: /etc/fundoo
+        state: directory
+        owner: fundoo
+        group: fundoo
+        mode: '0755'
+
+    - name: Create env.conf file with database configuration
+      template:
+        src: /home/ubuntu/fundoo_book/templates/env.conf.j2
+        dest: /etc/fundoo/env.conf
+        owner: fundoo
+        group: fundoo
+        mode: '0644'
+
+    - name: Run makemigrations
+      shell: |
+        bash -c "source myenv/bin/activate && python3 fundoo_notes/manage.py makemigrations"
+      args:
+        chdir: /Aws_test/
+
+    - name: Run migrate
+      shell: |
+        bash -c "source myenv/bin/activate && python3 fundoo_notes/manage.py migrate"
+      args:
+        chdir: /Aws_test/
+
+    - name: fundoo service file using jinja template
+      template:
+        src: /home/ubuntu/fundoo_book/templates/fundoo.service.j2
+        dest: /etc/systemd/system/fundoo.service
+        mode: '0644'
+
+    - name: Reload the systemd daemon,start and enable fundoo service
+      command: "sudo systemctl {{ item }}"
+      loop:
+        - daemon-reload
+        - start fundoo.service
+        - enable fundoo.service
+
+    - name: Get fundoo service status
+      systemd:
+        name: fundoo.service
+        state: started
+      register: fundoo_status
+
+    - name: Debug fundoo service status
+      debug:
+        msg: "Fundoo service is {{ fundoo_status.status.ActiveState }} and is enabled: {{ fundoo_status.status.UnitFileState }}"
+
+    - name: Test if application is running on localhost:8000
+      command: curl localhost:8000/home/ #When you use -s, curl doesn't display progress information or error messages.
+      register: curl_status
+      ignore_errors: yes
+
+    - name: Print the curl status of the application
+      debug:
+        msg: "Curl status: {{ curl_status.stdout }}"
+
+
+
+######
+
+- name: Frontend Nginx configuration
+  hosts: frontend
+  become: yes
+  vars_files:
+    - /home/ubuntu/fundoo_book/vars/backend_vars.yml
+    - /home/ubuntu/fundoo_book/vars/frontend.yml
+
+  tasks:
+    - name: Update the server packages
+      apt:
+        update_cache: yes
+
+    - name: Install nginx
+      apt:
+        name: nginx
+        state: latest
+
+    - name: Start and enable Nginx service
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+
+    - name: Set up configurations for Nginx
+      template:
+        src: /home/ubuntu/fundoo_book/templates/fundoo.conf.j2
+        dest: /etc/nginx/sites-available/fundoo.conf
+        mode: '0644'
+
+    - name: Unlink the default nginx site
+      command: "sudo unlink /etc/nginx/sites-enabled/default"
+
+
+    - name: Create a symbolic link for Nginx configuration
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/fundoo.conf
+        dest: /etc/nginx/sites-enabled/fundoo.conf
+        state: link
+        force: yes
+
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+
+    - name: Check if Nginx is running
+      command: "curl localhost/home/"
+      register: nginx_output
+      ignore_errors: yes
+
+    - name: Print the Nginx output
+      debug:
+        msg: "Nginx output: {{ nginx_output.stdout }}"
+
+
+

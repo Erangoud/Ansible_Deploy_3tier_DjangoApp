@@ -1,0 +1,7 @@
+db_name: "fundoo"
+db_user: "eran"
+db_password: "123456789"
+db_host: 10.0.3.235
+db_port: 5432
+
+

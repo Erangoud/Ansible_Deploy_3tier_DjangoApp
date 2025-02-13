@@ -1,0 +1,13 @@
+[Unit]
+Description=Gunicorn Service for Fundoo Project
+After=network.target
+
+[Service]
+User={{ user }}
+Group={{ group }}
+WorkingDirectory={{ working_directory }}
+EnvironmentFile={{ env_file }}
+ExecStart=/bin/bash -c 'source {{ virtualenv_path }} && {{ gunicorn_path }}/gunicorn --workers {{ workers }} --bind {{ bind_address }} {{ wsgi_module }}'
+
+[Install]
+WantedBy=multi-user.target

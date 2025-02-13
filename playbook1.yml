@@ -1,0 +1,27 @@
+---
+- name: Database configuration
+  hosts: database
+  become: yes
+  roles:
+    - psql_database
+
+
+- name: Backend server configuration for Fundoo application
+  hosts: backend
+  become: yes
+  roles:
+    - backend_role
+
+
+######
+
+- name: Frontend Nginx configuration
+  hosts: frontend
+  become: yes
+  vars_files:
+    - /home/ubuntu/fundoo_book/vars/backend_vars.yml
+  roles:
+    - nginx_frontend
+
+
+

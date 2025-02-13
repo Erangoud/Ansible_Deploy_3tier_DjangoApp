@@ -1,0 +1,14 @@
+user: "root"                     # User to run the service
+group: "root"
+gunicorn_path: "/Aws_test/myenv/bin/"                # Gunicorn path
+working_directory: "/Aws_test/fundoo_notes" # Directory containing the application
+env_file: "/etc/fundoo/env.conf" # Path to the environment variables file
+virtualenv_path: "/Aws_test/myenv/bin/activate" # Path to the virtual environment
+workers: 3                       # Number of Gunicorn workers
+bind_address: "0.0.0.0:8000"     # Address and port for Gunicorn to bind
+project_directory: "/Aws_test/fundoo_notes"
+wsgi_module: "fundoo_notes.wsgi:application" # WSGI module for the Django application "172.31.2.63"
+db_ip: 10.0.3.235
+
+
+

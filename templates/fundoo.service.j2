@@ -1,0 +1,13 @@
+[Unit]
+Description=Fundoo Service
+After=network.target
+
+[Service]
+User={{ user }}
+Group={{ user }}
+EnvironmentFile={{ env_file }}
+WorkingDirectory={{ working_directory }}
+ExecStart=/bin/bash -c 'source {{ virtualenv_path }} && exec python3 {{ project_directory }}/manage.py runserver 0.0.0.0:8000'
+
+[Install]
+WantedBy=multi-user.target
